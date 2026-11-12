@@ -1,0 +1,63 @@
+rules_version = '2';
+
+// Aturan keamanan Firestore per peran: warga, rt, pengurus, admin.
+// Pasang lewat Firebase Console > Firestore > Rules (atau `firebase deploy --only firestore:rules`).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function myRole() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role;
+    }
+
+    function isAdmin() {
+      return signedIn() && myRole() == 'admin';
+    }
+
+    function isPengurus() {
+      return signedIn() && myRole() in ['rt', 'pengurus', 'admin'];
+    }
+
+    // Profil pengguna
+    match /users/{uid} {
+      allow read: if signedIn() && (request.auth.uid == uid || isPengurus());
+      // Mendaftar sendiri: selalu 'warga' dan hanya field yang diizinkan.
+      allow create: if signedIn()
+        && request.auth.uid == uid
+        && request.resource.data.role == 'warga'
+        && request.resource.data.keys().hasOnly(['name', 'rt', 'role', 'createdAt']);
+      // Pengguna boleh ubah profilnya sendiri tapi tidak boleh mengubah peran.
+      allow update: if isAdmin()
+        || (signedIn()
+            && request.auth.uid == uid
+            && request.resource.data.role == resource.data.role);
+      allow delete: if isAdmin();
+    }
+
+    // Sinyal darurat
+    match /panic_alerts/{id} {
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow read: if isPengurus();
+      allow update, delete: if isAdmin();
+    }
+
+    // Kontak darurat yang diatur admin
+    match /emergency_contacts/{id} {
+      allow read: if signedIn();
+      allow write: if isAdmin();
+    }
+
+    // Data warga (NIK, alamat) = sensitif, hanya RT/pengurus/admin
+    match /residents/{id} {
+      allow read, write: if isPengurus();
+    }
+
+    // Selain yang di atas: ditutup.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
